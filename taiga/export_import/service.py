@@ -70,6 +70,7 @@ def store_project(data):
     if serialized.is_valid():
         serialized.object._importing = True
         serialized.object.save()
+        serialized.save_watchers()
         return serialized
     add_errors("project", serialized.errors)
     return None
@@ -216,6 +217,7 @@ def store_task(project, data):
         serialized.object._not_notify = True
 
         serialized.save()
+        serialized.save_watchers()
 
         if serialized.object.ref:
             sequence_name = refs.make_sequence_name(project)
@@ -256,6 +258,7 @@ def store_milestone(project, milestone):
         serialized.object.project = project
         serialized.object._importing = True
         serialized.save()
+        serialized.save_watchers()
 
         for task_without_us in milestone.get("tasks_without_us", []):
             task_without_us["user_story"] = None
@@ -319,6 +322,7 @@ def store_wiki_page(project, wiki_page):
         serialized.object._importing = True
         serialized.object._not_notify = True
         serialized.save()
+        serialized.save_watchers()
 
         for attachment in wiki_page.get("attachments", []):
             store_attachment(project, serialized.object, attachment)
@@ -373,6 +377,7 @@ def store_user_story(project, data):
         serialized.object._not_notify = True
 
         serialized.save()
+        serialized.save_watchers()
 
         if serialized.object.ref:
             sequence_name = refs.make_sequence_name(project)
@@ -433,6 +438,7 @@ def store_issue(project, data):
         serialized.object._not_notify = True
 
         serialized.save()
+        serialized.save_watchers()
 
         if serialized.object.ref:
             sequence_name = refs.make_sequence_name(project)

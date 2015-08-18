@@ -17,12 +17,19 @@
 from functools import partial
 from operator import is_not
 
-from django.conf import settings
+from django.apps import apps
+from django.contrib.contenttypes.models import ContentType
 from django.db import models
 from django.utils.translation import ugettext_lazy as _
 
+from taiga.base import response
+from taiga.base.decorators import detail_route
+from taiga.base.api import serializers
+from taiga.base.fields import WatchersField
 from taiga.projects.notifications import services
-
+from taiga.projects.notifications.utils import attach_watchers_to_queryset, attach_is_watched_to_queryset
+from taiga.users.models import User
+from . import models
 
 class WatchedResourceMixin(object):
     """
@@ -35,6 +42,27 @@ class WatchedResourceMixin(object):
     """
 
     _not_notify = False
+
+    def attach_watchers_attrs_to_queryset(self, queryset):
+        qs = attach_watchers_to_queryset(queryset)
+        if self.request.user.is_authenticated():
+            qs = attach_is_watched_to_queryset(self.request.user, qs)
+
+        return qs
+
+    @detail_route(methods=["POST"])
+    def watch(self, request, pk=None):
+        obj = self.get_object()
+        self.check_permissions(request, "watch", obj)
+        services.add_watcher(obj, request.user)
+        return response.Ok()
+
+    @detail_route(methods=["POST"])
+    def unwatch(self, request, pk=None):
+        obj = self.get_object()
+        self.check_permissions(request, "unwatch", obj)
+        services.remove_watcher(obj, request.user)
+        return response.Ok()
 
     def send_notifications(self, obj, history=None):
         """
@@ -73,7 +101,7 @@ class WatchedResourceMixin(object):
         super().pre_delete(obj)
 
 
-class WatchedModelMixin(models.Model):
+class WatchedModelMixin(object):
     """
     Generic model mixin that makes model compatible
     with notification system.
@@ -82,11 +110,6 @@ class WatchedModelMixin(models.Model):
     this mixin if you want send notifications about
     your model class.
     """
-    watchers = models.ManyToManyField(settings.AUTH_USER_MODEL, null=True, blank=True,
-                                      related_name="%(app_label)s_%(class)s+",
-                                      verbose_name=_("watchers"))
-    class Meta:
-        abstract = True
 
     def get_project(self) -> object:
         """
@@ -97,6 +120,7 @@ class WatchedModelMixin(models.Model):
         that should works in almost all cases.
         """
         return self.project
+        t
 
     def get_watchers(self) -> frozenset:
         """
@@ -112,7 +136,13 @@ class WatchedModelMixin(models.Model):
         very inefficient way for obtain watchers but at
         this momment is the simplest way.
         """
-        return frozenset(self.watchers.all())
+        return frozenset(services.get_watchers(self))
+
+    def add_watcher(self, user):
+        services.add_watcher(self, user)
+
+    def remove_watcher(self, user):
+        services.remove_watcher(self, user)
 
     def get_owner(self) -> object:
         """
@@ -140,3 +170,44 @@ class WatchedModelMixin(models.Model):
                         self.get_owner(),)
         is_not_none = partial(is_not, None)
         return frozenset(filter(is_not_none, participants))
+
+
+class WatchedResourceSerializerMixin(serializers.ModelSerializer):
+    is_watched = serializers.SerializerMethodField("get_is_watched")
+    watchers = WatchersField(required=False)
+
+    def get_is_watched(self, obj):
+        # The "is_watched" attribute is attached in the get_queryset of the viewset.
+        return getattr(obj, "is_watched", False) or False
+
+    def restore_object(self, attrs, instance=None):
+        #watchers is not a field from the model but can be attached in the get_queryset of the viewset.
+        #If that's the case we need to remove it before calling the super method
+        watcher_field = self.fields.pop("watchers", None)
+        instance = super(WatchedResourceSerializerMixin, self).restore_object(attrs, instance)
+        if instance is not None and self.validate_watchers(attrs, "watchers"):
+            new_watcher_ids = set(attrs.get("watchers", []))
+            old_watcher_ids = set(services.get_watchers(instance).values_list("id", flat=True))
+            adding_watcher_ids = list(new_watcher_ids.difference(old_watcher_ids))
+            removing_watcher_ids = list(old_watcher_ids.difference(new_watcher_ids))
+
+            User = apps.get_model("users", "User")
+            adding_users = User.objects.filter(id__in=adding_watcher_ids)
+            removing_users = User.objects.filter(id__in=removing_watcher_ids)
+            for user in adding_users:
+                services.add_watcher(instance, user)
+
+            for user in removing_users:
+                services.remove_watcher(instance, user)
+
+            instance.watchers = services.get_watchers(instance)
+
+        return instance
+
+
+    def to_native(self, obj):
+        #watchers is wasn't attached via the get_queryset of the viewset we need to manually add it
+        if not hasattr(obj, "watchers"):
+            obj.watchers = services.get_watchers(obj)
+
+        return super(WatchedResourceSerializerMixin, self).to_native(obj)
