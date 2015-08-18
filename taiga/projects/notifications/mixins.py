@@ -19,17 +19,21 @@ from operator import is_not
 
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ObjectDoesNotExist
 from django.db import models
 from django.utils.translation import ugettext_lazy as _
 
 from taiga.base import response
 from taiga.base.decorators import detail_route
 from taiga.base.api import serializers
+from taiga.base.api.utils import get_object_or_404
 from taiga.base.fields import WatchersField
 from taiga.projects.notifications import services
 from taiga.projects.notifications.utils import attach_watchers_to_queryset, attach_is_watched_to_queryset
 from taiga.users.models import User
 from . import models
+from . serializers import WatcherSerializer
+
 
 class WatchedResourceMixin(object):
     """
@@ -120,7 +124,6 @@ class WatchedModelMixin(object):
         that should works in almost all cases.
         """
         return self.project
-        t
 
     def get_watchers(self) -> frozenset:
         """
@@ -137,6 +140,9 @@ class WatchedModelMixin(object):
         this momment is the simplest way.
         """
         return frozenset(services.get_watchers(self))
+
+    def get_watched(self, user_or_id):
+        return services.get_watched(user_or_id, type(self))
 
     def add_watcher(self, user):
         services.add_watcher(self, user)
@@ -208,6 +214,41 @@ class WatchedResourceSerializerMixin(serializers.ModelSerializer):
     def to_native(self, obj):
         #watchers is wasn't attached via the get_queryset of the viewset we need to manually add it
         if not hasattr(obj, "watchers"):
-            obj.watchers = services.get_watchers(obj)
+            obj.watchers = [user.id for user in services.get_watchers(obj)]
 
         return super(WatchedResourceSerializerMixin, self).to_native(obj)
+
+
+class WatchersViewSetMixin:
+    # Is a ModelListViewSet with two required params: permission_classes and resource_model
+    serializer_class = WatcherSerializer
+    list_serializer_class = WatcherSerializer
+    permission_classes = None
+    resource_model = None
+
+    def retrieve(self, request, *args, **kwargs):
+        pk = kwargs.get("pk", None)
+        resource_id = kwargs.get("resource_id", None)
+        resource = get_object_or_404(self.resource_model, pk=resource_id)
+
+        self.check_permissions(request, 'retrieve', resource)
+
+        try:
+            self.object = services.get_watchers(resource).get(pk=pk)
+        except ObjectDoesNotExist: # or User.DoesNotExist
+            return response.NotFound()
+
+        serializer = self.get_serializer(self.object)
+        return response.Ok(serializer.data)
+
+    def list(self, request, *args, **kwargs):
+        resource_id = kwargs.get("resource_id", None)
+        resource = get_object_or_404(self.resource_model, pk=resource_id)
+
+        self.check_permissions(request, 'list', resource)
+
+        return super().list(request, *args, **kwargs)
+
+    def get_queryset(self):
+        resource = self.resource_model.objects.get(pk=self.kwargs.get("resource_id"))
+        return services.get_watchers(resource)

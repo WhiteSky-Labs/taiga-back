@@ -25,7 +25,7 @@ from taiga.projects.issues import models as issue_models
 from taiga.projects.milestones import models as milestone_models
 from taiga.projects.history import models as history_models
 from taiga.projects.wiki import models as wiki_models
-
+from taiga.projects.notifications.mixins import WatchedResourceSerializerMixin
 from .models import Webhook, WebhookLog
 
 
@@ -103,7 +103,7 @@ class PointSerializer(serializers.Serializer):
         return obj.value
 
 
-class UserStorySerializer(CustomAttributesValuesWebhookSerializerMixin, serializers.ModelSerializer):
+class UserStorySerializer(CustomAttributesValuesWebhookSerializerMixin, WatchedResourceSerializerMixin, serializers.ModelSerializer):
     tags = TagsField(default=[], required=False)
     external_reference = PgArrayField(required=False)
     owner = UserSerializer()
@@ -119,7 +119,7 @@ class UserStorySerializer(CustomAttributesValuesWebhookSerializerMixin, serializ
         return project.userstorycustomattributes.all()
 
 
-class TaskSerializer(CustomAttributesValuesWebhookSerializerMixin, serializers.ModelSerializer):
+class TaskSerializer(CustomAttributesValuesWebhookSerializerMixin, WatchedResourceSerializerMixin, serializers.ModelSerializer):
     tags = TagsField(default=[], required=False)
     owner = UserSerializer()
     assigned_to = UserSerializer()
@@ -132,7 +132,7 @@ class TaskSerializer(CustomAttributesValuesWebhookSerializerMixin, serializers.M
         return project.taskcustomattributes.all()
 
 
-class IssueSerializer(CustomAttributesValuesWebhookSerializerMixin, serializers.ModelSerializer):
+class IssueSerializer(CustomAttributesValuesWebhookSerializerMixin, WatchedResourceSerializerMixin, serializers.ModelSerializer):
     tags = TagsField(default=[], required=False)
     owner = UserSerializer()
     assigned_to = UserSerializer()
